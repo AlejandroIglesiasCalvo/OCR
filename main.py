@@ -2,6 +2,8 @@ import sys
 import fitz, cv2, numpy as np, base64, ollama
 from pathlib import Path
 import threading
+from tqdm import tqdm  # Importar tqdm para la barra de progreso
+import time  # Importar time para el temporizador
 
 # Parámetros y modelo a usar
 MODEL_NAME = "llama3.2-vision:11b"
@@ -50,6 +52,16 @@ def process_pdf(pdf_path):
         timer = threading.Timer(TIMEOUT, timeout_handler)
         timer.start()
 
+        # Mostrar barra de progreso en un hilo separado
+        def progress_bar():
+            for _ in tqdm(range(TIMEOUT), desc="Tiempo restante", unit="s"):
+                if timeout_occurred:
+                    break
+                time.sleep(1)
+
+        progress_thread = threading.Thread(target=progress_bar)
+        progress_thread.start()
+
         try:
             clean_image = preprocess_image(page)
             _, png_bytes = cv2.imencode(".png", clean_image)
@@ -68,6 +80,7 @@ def process_pdf(pdf_path):
             print(f"Error en la página {i + 1}: {e}")
         finally:
             timer.cancel()
+            progress_thread.join()
 
     return "\n\n".join(md_output)
 
