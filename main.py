@@ -1,11 +1,13 @@
 import sys
 import fitz, cv2, numpy as np, base64, ollama
 from pathlib import Path
+import signal
 
 # Parámetros y modelo a usar
 MODEL_NAME = "llama3.2-vision:11b"
 PROMPT = ("Extract all the text from the image (in Spanish) and output it as Markdown, "
           "preserving the original formatting (headings, lists, tables, etc.).")
+TIMEOUT = 300  # 5 minutos en segundos
 
 def preprocess_image(page):
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
@@ -32,6 +34,8 @@ def preprocess_image(page):
 
     return thresh
 
+def timeout_handler(signum, frame):
+    raise TimeoutError("Tiempo de procesamiento excedido")
 
 def process_pdf(pdf_path):
     doc = fitz.open(pdf_path)
@@ -40,20 +44,26 @@ def process_pdf(pdf_path):
 
     for i, page in enumerate(doc):
         print(f"Procesando página {i + 1}/{total_pages}")
-        clean_image = preprocess_image(page)
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(TIMEOUT)
+        try:
+            clean_image = preprocess_image(page)
 
-        _, png_bytes = cv2.imencode(".png", clean_image)
-        b64_img = base64.b64encode(png_bytes).decode('utf-8')
+            _, png_bytes = cv2.imencode(".png", clean_image)
+            b64_img = base64.b64encode(png_bytes).decode('utf-8')
 
-        response = ollama.chat(model="llama3.2-vision:11b", messages=[
-            {'role': 'user', 'content': PROMPT, 'images': [b64_img]}
-        ])
+            response = ollama.chat(model="llama3.2-vision:11b", messages=[
+                {'role': 'user', 'content': PROMPT, 'images': [b64_img]}
+            ])
 
-        text_md = response['message']['content']
-        md_output.append(text_md)
+            text_md = response['message']['content']
+            md_output.append(text_md)
+        except TimeoutError:
+            print(f"Tiempo de procesamiento excedido para la página {i + 1}")
+        finally:
+            signal.alarm(0)
 
     return "\n\n".join(md_output)
-
 
 def main(pdf_folder):
     pdf_dir = Path(pdf_folder)
@@ -71,22 +81,28 @@ def main(pdf_folder):
 
         for i, page in enumerate(doc):
             print(f"Procesando página {i + 1}/{total_pages}")
-            clean_image = preprocess_image(page)
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(TIMEOUT)
+            try:
+                clean_image = preprocess_image(page)
 
-            _, png_bytes = cv2.imencode(".png", clean_image)
-            b64_img = base64.b64encode(png_bytes).decode('utf-8')
+                _, png_bytes = cv2.imencode(".png", clean_image)
+                b64_img = base64.b64encode(png_bytes).decode('utf-8')
 
-            response = ollama.chat(model="llama3.2-vision:11b", messages=[
-                {'role': 'user', 'content': PROMPT, 'images': [b64_img]}
-            ])
+                response = ollama.chat(model="llama3.2-vision:11b", messages=[
+                    {'role': 'user', 'content': PROMPT, 'images': [b64_img]}
+                ])
 
-            md_output.append(response['message']['content'])
+                md_output.append(response['message']['content'])
+            except TimeoutError:
+                print(f"Tiempo de procesamiento excedido para la página {i + 1}")
+            finally:
+                signal.alarm(0)
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write("\n\n".join(md_output))
 
         print(f"Guardado: {output_path}")
-
 
 if __name__ == "__main__":
     import sys
