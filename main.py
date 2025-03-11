@@ -60,6 +60,11 @@ def main(pdf_folder):
     for pdf_path in pdf_dir.glob('*.pdf'):
         print(f"Procesando: {pdf_path.name}")
 
+        output_path = pdf_path.with_suffix('.md')
+        if output_path.exists():
+            print(f"El archivo {output_path.name} ya existe. Saltando...")
+            continue
+
         doc = fitz.open(pdf_path)
         md_output = []
         total_pages = len(doc)
@@ -77,7 +82,6 @@ def main(pdf_folder):
 
             md_output.append(response['message']['content'])
 
-        output_path = pdf_path.with_suffix('.md')
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write("\n\n".join(md_output))
 
