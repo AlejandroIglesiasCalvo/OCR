@@ -1,0 +1,4 @@
+ollama
+pymupdf
+opencv-python
+numpy
