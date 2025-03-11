@@ -9,6 +9,3 @@ env/
 # Archivos de configuración de IDE
 .vscode/
 .idea/
-
-# Archivos de salida
-*.md
