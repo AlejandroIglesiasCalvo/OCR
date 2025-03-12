@@ -3,14 +3,14 @@ import fitz
 import cv2
 import numpy as np
 import base64
-import ollama
 from pathlib import Path
 import threading
 from tqdm import tqdm
 import time
-import multiprocessing  # ***CAMBIO*** para subprocesos
+import multiprocessing
+from ollama_ocr import OCRProcessor  # Nuevo import
 
-MODEL_NAME = "llama3.2-vision:11b"
+MODEL_NAME = "granite3.2-vision"
 PROMPT = (
     "Extrae únicamente el texto e imágenes visibles en la imagen. "
     "El resultado debe estar completamente en español y en formato Markdown, "
@@ -42,81 +42,41 @@ def preprocess_image(page):
 
     return processed
 
-# Función auxiliar que se ejecutará en un subproceso
-def run_ollama_subprocess(model_name, prompt, b64_img, return_dict):
-    try:
-        response = ollama.chat(
-            model=model_name,
-            messages=[{'role': 'user', 'content': prompt, 'images': [b64_img]}]
-        )
-        return_dict["content"] = response['message']['content']
-    except Exception as e:
-        return_dict["error"] = str(e)
+# Se elimina la función run_ollama_subprocess ya no necesaria
 
 def process_pdf(pdf_path):
     doc = fitz.open(pdf_path)
-    md_output = []
+    # Crear carpeta temporal para las imágenes extraídas
+    temp_dir = pdf_path.parent / (pdf_path.stem + "_temp")
+    temp_dir.mkdir(exist_ok=True)
+    image_paths = []
     total_pages = len(doc)
-
     for i, page in enumerate(doc):
         print(f"Procesando página {i + 1}/{total_pages}")
-
-        stop_event = threading.Event()
-        p = None  # Inicializamos la variable para el proceso hijo
-
-        def progress_bar():
-            with tqdm(total=TIMEOUT, desc="Tiempo restante", unit="s") as pbar:
-                for _ in range(TIMEOUT):
-                    if stop_event.is_set():
-                        break
-                    time.sleep(1)
-                    pbar.update(1)
-
-        progress_thread = threading.Thread(target=progress_bar)
-        progress_thread.start()
-
-        try:
-            clean_image = preprocess_image(page)
-            _, png_bytes = cv2.imencode(".png", clean_image)
-            b64_img = base64.b64encode(png_bytes).decode('utf-8')
-
-            # Usamos multiprocessing para ejecutar ollama.chat
-            manager = multiprocessing.Manager()
-            return_dict = manager.dict()
-
-            p = multiprocessing.Process(
-                target=run_ollama_subprocess,
-                args=(MODEL_NAME, PROMPT, b64_img, return_dict)
-            )
-            p.start()
-
-            # Esperamos hasta TIMEOUT segundos
-            p.join(TIMEOUT)
-
-            # Si el proceso sigue vivo, lo terminamos
-            if p.is_alive():
-                print(f"Tiempo excedido para la página {i + 1}, terminando proceso.")
-                p.terminate()
-                p.join()
-            else:
-                # Si no hay error, agregamos el contenido devuelto
-                if "error" in return_dict:
-                    print(f"Error en la página {i + 1}: {return_dict['error']}")
-                else:
-                    md_output.append(return_dict["content"])
-
-        except KeyboardInterrupt:
-            print("\nInterrupción por teclado detectada. Terminando proceso actual...")
-            if p is not None and p.is_alive():
-                p.terminate()
-                p.join()
-            raise  # Propagamos la excepción para finalizar todo el programa
-        except Exception as e:
-            print(f"Error en la página {i + 1}: {e}")
-        finally:
-            stop_event.set()
-            progress_thread.join()
-
+        clean_image = preprocess_image(page)
+        _, png_bytes = cv2.imencode(".png", clean_image)
+        img_path = temp_dir / f"page_{i+1:03d}.png"
+        with open(img_path, "wb") as f:
+            f.write(png_bytes.tobytes())
+        image_paths.append(str(img_path))
+    
+    # Inicializar OCRProcessor y procesar en lote
+    ocr = OCRProcessor(model_name=MODEL_NAME, max_workers=4)
+    batch_results = ocr.process_batch(
+        input_path=str(temp_dir),
+        format_type="markdown",
+        recursive=False,
+        preprocess=False,
+        custom_prompt=PROMPT,
+        language="Spanish"
+    )
+    
+    # Recopilar resultados ordenados por nombre (asumiendo numeración en el nombre del archivo)
+    md_output = []
+    for img_file in sorted(batch_results['results'].keys()):
+        md_output.append(batch_results['results'][img_file])
+    
+    # ...opcional: código para eliminar la carpeta temporal si se desea...
     return "\n\n".join(md_output)
 
 def main(pdf_folder):
