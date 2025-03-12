@@ -1,14 +1,22 @@
 import sys
-import fitz, cv2, numpy as np, base64, ollama
+import fitz
+import cv2
+import numpy as np
+import base64
+import ollama
 from pathlib import Path
 import threading
 from tqdm import tqdm
 import time
+import multiprocessing  # ***CAMBIO*** para subprocesos
 
 MODEL_NAME = "llama3.2-vision:11b"
-PROMPT = ("Extrae todo el texto de la imagen en español y conviértelo a formato Markdown, "
-          "preservando el formato original, incluyendo encabezados, listas, tablas, "
-          "negritas, cursivas y cualquier otro estilo de formato presente en el documento.")
+PROMPT = (
+    "Extract only the visible text from the image in Spanish, ensuring that the final output is entirely in Spanish, without adding, inferring, or generating any additional content. "
+    "Convert the text to Markdown format, preserving exactly the original formatting (headings, lists, tables, bold, italics, etc.) as it appears in the image. "
+    "If any part is unreadable, mark it as 'unreadable text' without assuming or completing the information. "
+    "Do not include any extra information or modify the original content."
+)
 TIMEOUT = 300  # segundos
 
 def preprocess_image(page):
@@ -36,6 +44,27 @@ def preprocess_image(page):
 
     return thresh
 
+# ***CAMBIO*** Función auxiliar que se ejecutará en un subproceso
+def run_ollama_subprocess(model_name, prompt, b64_img, return_dict):
+    """
+    Llama a ollama.chat y guarda el contenido de la respuesta en return_dict.
+    Si ocurre un error, lo guarda también.
+    """
+    try:
+        response = ollama.chat(
+            model=model_name,
+            messages=[
+                {
+                    'role': 'user',
+                    'content': prompt,
+                    'images': [b64_img]
+                }
+            ]
+        )
+        return_dict["content"] = response['message']['content']
+    except Exception as e:
+        return_dict["error"] = str(e)
+
 def process_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     md_output = []
@@ -44,18 +73,10 @@ def process_pdf(pdf_path):
     for i, page in enumerate(doc):
         print(f"Procesando página {i + 1}/{total_pages}")
 
-        timeout_occurred = False
+        # Evento para detener la barra de progreso
         stop_event = threading.Event()
 
-        def timeout_handler():
-            nonlocal timeout_occurred
-            timeout_occurred = True
-            stop_event.set()
-
-        timer = threading.Timer(TIMEOUT, timeout_handler)
-        timer.start()
-
-        # Barra de progreso que se detiene inmediatamente al terminar el OCR o timeout
+        # Barra de progreso en un hilo aparte
         def progress_bar():
             with tqdm(total=TIMEOUT, desc="Tiempo restante", unit="s") as pbar:
                 for _ in range(TIMEOUT):
@@ -72,20 +93,35 @@ def process_pdf(pdf_path):
             _, png_bytes = cv2.imencode(".png", clean_image)
             b64_img = base64.b64encode(png_bytes).decode('utf-8')
 
-            response = ollama.chat(model=MODEL_NAME, messages=[
-                {'role': 'user', 'content': PROMPT, 'images': [b64_img]}
-            ])
+            # ***CAMBIO*** Usamos multiprocessing para ejecutar ollama.chat
+            manager = multiprocessing.Manager()
+            return_dict = manager.dict()
 
-            if not timeout_occurred:
-                md_output.append(response['message']['content'])
+            p = multiprocessing.Process(
+                target=run_ollama_subprocess,
+                args=(MODEL_NAME, PROMPT, b64_img, return_dict)
+            )
+            p.start()
+
+            # Esperamos hasta TIMEOUT segundos
+            p.join(TIMEOUT)
+
+            # Si sigue vivo, matamos el proceso y no agregamos nada al resultado
+            if p.is_alive():
+                print(f"Tiempo excedido para la página {i + 1}, terminando proceso.")
+                p.terminate()
+                p.join()
             else:
-                print(f"Tiempo excedido para la página {i + 1}, saltando a la siguiente.")
+                # Si no hay error, agregamos el contenido devuelto
+                if "error" in return_dict:
+                    print(f"Error en la página {i + 1}: {return_dict['error']}")
+                else:
+                    md_output.append(return_dict["content"])
 
         except Exception as e:
             print(f"Error en la página {i + 1}: {e}")
         finally:
-            timer.cancel()
-            stop_event.set()  # Asegurar que la barra se detenga inmediatamente
+            stop_event.set()
             progress_thread.join()
 
     return "\n\n".join(md_output)
@@ -108,6 +144,8 @@ def main(pdf_folder):
         print(f"Guardado: {output_path}")
 
 if __name__ == "__main__":
+    # ***IMPORTANTE*** Para evitar problemas con multiprocessing en Windows,
+    # conviene usar esta salvaguarda de 'if __name__ == "__main__":'
     if len(sys.argv) != 2:
         print("Uso: python main.py [ruta_carpeta_pdfs]")
         sys.exit(1)
