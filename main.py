@@ -21,59 +21,27 @@ PROMPT = (
 TIMEOUT = 300  # segundos
 
 def preprocess_image(page):
-    # Renderizamos la página con un aumento para mayor calidad
+    """
+    Se actualiza el preprocesamiento para mejorar el OCR.
+    La versión antigua usaba un preprocesamiento menos agresivo,
+    lo que ayuda a preservar los detalles importantes de la imagen.
+    """
+    # Renderizamos la página a alta resolución
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
     img_data = pix.tobytes("png")
     np_arr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-    # Convertimos a escala de grises y aplicamos denoising
+    # Convertimos a escala de grises
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.fastNlMeansDenoising(gray, h=15)
 
-    # Umbralización con Otsu para separar fondo y contenido
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Aplicamos un filtro de mediana para reducir el ruido, preservando detalles finos
+    processed = cv2.medianBlur(gray, 3)
 
-    # Detectamos los píxeles que NO son fondo
-    coords = np.column_stack(np.where(thresh < 255))
+    # Opcional: Mejoramos el contraste aplicando ecualización del histograma
+    processed = cv2.equalizeHist(processed)
 
-    if coords.size > 0:
-        # Recortamos la imagen a la región con contenido
-        x, y, w, h = cv2.boundingRect(coords)
-        cropped = thresh[y:y+h, x:x+w]
-    else:
-        cropped = thresh
-
-    # Calculamos el ángulo de rotación usando los píxeles con contenido
-    if coords.size > 0:
-        angle = cv2.minAreaRect(coords)[-1]
-        if angle < -45:
-            angle = -(90 + angle)
-        else:
-            angle = -angle
-    else:
-        angle = 0
-
-    # Comprobamos si la imagen recortada está vacía
-    if cropped.shape[0] == 0 or cropped.shape[1] == 0:
-        # Si está vacía, la devolvemos tal cual
-        return cropped
-
-    # Si el ángulo es significativo y la imagen no está vacía, rotamos
-    if abs(angle) > 0.1:
-        h_img, w_img = cropped.shape[:2]
-        # Solo rotamos si w_img y h_img > 0
-        if w_img > 0 and h_img > 0:
-            M = cv2.getRotationMatrix2D((w_img // 2, h_img // 2), angle, 1.0)
-            rotated = cv2.warpAffine(cropped, M, (w_img, h_img), flags=cv2.INTER_LINEAR)
-        else:
-            # Si no, devolvemos la imagen tal cual
-            rotated = cropped
-    else:
-        rotated = cropped
-
-    return rotated
-
+    return processed
 
 # ***CAMBIO*** Función auxiliar que se ejecutará en un subproceso
 def run_ollama_subprocess(model_name, prompt, b64_img, return_dict):
@@ -84,13 +52,11 @@ def run_ollama_subprocess(model_name, prompt, b64_img, return_dict):
     try:
         response = ollama.chat(
             model=model_name,
-            messages=[
-                {
-                    'role': 'user',
-                    'content': prompt,
-                    'images': [b64_img]
-                }
-            ]
+            messages=[{
+                'role': 'user',
+                'content': prompt,
+                'images': [b64_img]
+            }]
         )
         return_dict["content"] = response['message']['content']
     except Exception as e:
