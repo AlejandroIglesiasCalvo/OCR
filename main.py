@@ -18,7 +18,7 @@ PROMPT = (
     "Si alguna parte es ilegible, márcala como 'texto ilegible'. "
     "No incluyas ningún contenido adicional ni información sobre herramientas externas o detalles que no estén presentes en la imagen."
 )
-TIMEOUT = 300  # segundos
+TIMEOUT = 900  # segundos
 
 def preprocess_image(page):
     """
