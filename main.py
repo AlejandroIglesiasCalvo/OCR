@@ -2,14 +2,14 @@ import sys
 import fitz, cv2, numpy as np, base64, ollama
 from pathlib import Path
 import threading
-from tqdm import tqdm  # Importar tqdm para la barra de progreso
-import time  # Importar time para el temporizador
+from tqdm import tqdm
+import time
 
-# Parámetros y modelo a usar
 MODEL_NAME = "llama3.2-vision:11b"
-PROMPT = ("Extract all the text from the image (in Spanish) and output it as Markdown, "
-          "preserving the original formatting (headings, lists, tables, etc.).")
-TIMEOUT = 300  # 5 minutos
+PROMPT = ("Extrae todo el texto de la imagen en español y conviértelo a formato Markdown, "
+          "preservando el formato original, incluyendo encabezados, listas, tablas, "
+          "negritas, cursivas y cualquier otro estilo de formato presente en el documento.")
+TIMEOUT = 300  # segundos
 
 def preprocess_image(page):
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
@@ -45,19 +45,24 @@ def process_pdf(pdf_path):
         print(f"Procesando página {i + 1}/{total_pages}")
 
         timeout_occurred = False
+        stop_event = threading.Event()
+
         def timeout_handler():
             nonlocal timeout_occurred
             timeout_occurred = True
+            stop_event.set()
 
         timer = threading.Timer(TIMEOUT, timeout_handler)
         timer.start()
 
-        # Mostrar barra de progreso en un hilo separado
+        # Barra de progreso que se detiene inmediatamente al terminar el OCR o timeout
         def progress_bar():
-            for _ in tqdm(range(TIMEOUT), desc="Tiempo restante", unit="s"):
-                if timeout_occurred:
-                    break
-                time.sleep(1)
+            with tqdm(total=TIMEOUT, desc="Tiempo restante", unit="s") as pbar:
+                for _ in range(TIMEOUT):
+                    if stop_event.is_set():
+                        break
+                    time.sleep(1)
+                    pbar.update(1)
 
         progress_thread = threading.Thread(target=progress_bar)
         progress_thread.start()
@@ -80,6 +85,7 @@ def process_pdf(pdf_path):
             print(f"Error en la página {i + 1}: {e}")
         finally:
             timer.cancel()
+            stop_event.set()  # Asegurar que la barra se detenga inmediatamente
             progress_thread.join()
 
     return "\n\n".join(md_output)
