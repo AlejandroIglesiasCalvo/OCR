@@ -31,11 +31,12 @@ def preprocess_image(page):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.fastNlMeansDenoising(gray, h=15)
 
-    # Umbralización con Otsu para separar fondo (blanco) y contenido (texto/imágenes oscuros)
+    # Umbralización con Otsu para separar fondo y contenido
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # Detectamos los píxeles que NO son fondo (suponiendo fondo blanco: 255)
+    # Detectamos los píxeles que NO son fondo
     coords = np.column_stack(np.where(thresh < 255))
+
     if coords.size > 0:
         # Recortamos la imagen a la región con contenido
         x, y, w, h = cv2.boundingRect(coords)
@@ -53,15 +54,26 @@ def preprocess_image(page):
     else:
         angle = 0
 
-    # Si el ángulo es significativo, rotamos la imagen
+    # Comprobamos si la imagen recortada está vacía
+    if cropped.shape[0] == 0 or cropped.shape[1] == 0:
+        # Si está vacía, la devolvemos tal cual
+        return cropped
+
+    # Si el ángulo es significativo y la imagen no está vacía, rotamos
     if abs(angle) > 0.1:
         h_img, w_img = cropped.shape[:2]
-        M = cv2.getRotationMatrix2D((w_img // 2, h_img // 2), angle, 1.0)
-        rotated = cv2.warpAffine(cropped, M, (w_img, h_img), flags=cv2.INTER_LINEAR)
+        # Solo rotamos si w_img y h_img > 0
+        if w_img > 0 and h_img > 0:
+            M = cv2.getRotationMatrix2D((w_img // 2, h_img // 2), angle, 1.0)
+            rotated = cv2.warpAffine(cropped, M, (w_img, h_img), flags=cv2.INTER_LINEAR)
+        else:
+            # Si no, devolvemos la imagen tal cual
+            rotated = cropped
     else:
         rotated = cropped
 
     return rotated
+
 
 # ***CAMBIO*** Función auxiliar que se ejecutará en un subproceso
 def run_ollama_subprocess(model_name, prompt, b64_img, return_dict):
