@@ -1,5 +1,2 @@
-ollama
-pymupdf
-opencv-python
-numpy
+google-generativeai
 tqdm

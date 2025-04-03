@@ -1,11 +1,11 @@
 # OCR Project
 
-Este proyecto extrae texto de archivos PDF y lo convierte en formato Markdown, preservando el formato original (encabezados, listas, tablas, etc.).
+Este proyecto extrae texto de archivos PDF y lo convierte en formato Markdown, preservando el formato original (encabezados, listas, tablas, etc.) utilizando Google Gemini 2.5 Pro.
 
 ## Requisitos
 
 - Python 3.x
-- Librerías: `fitz` (PyMuPDF), `cv2` (OpenCV), `numpy`, `base64`, `ollama`
+- Librerías: `google-generativeai`, `fitz` (PyMuPDF), `cv2` (OpenCV), `numpy`, `tqdm`
 
 ## Instalación
 
@@ -15,10 +15,20 @@ Este proyecto extrae texto de archivos PDF y lo convierte en formato Markdown, p
     cd OCR
     ```
 
-2. Instala las dependencias:
+2. Crea un entorno virtual e instala las dependencias:
     ```bash
-    pip install pymupdf opencv-python numpy
+    python -m venv .cline_venv
+    # En Windows
+    .\.cline_venv\Scripts\activate
+    # En Linux/Mac
+    source .cline_venv/bin/activate
+    
+    pip install -r requirements.txt
     ```
+
+## Configuración
+
+El proyecto utiliza la API de Google Gemini. La clave API ya está configurada en el código, pero si necesitas cambiarla, puedes modificar la variable `API_KEY` en el archivo `main.py`.
 
 ## Uso
 
@@ -33,6 +43,13 @@ Por ejemplo:
 ```bash
 python main.py ./pdfs
 ```
+
+## Funcionamiento
+
+1. El script procesa cada archivo PDF en la carpeta especificada.
+2. Cada página del PDF se convierte en una imagen PNG.
+3. Google Gemini 2.5 Pro analiza cada imagen y extrae el texto con formato.
+4. El resultado se guarda en un archivo Markdown con el mismo nombre que el PDF original.
 
 ## Salida
 

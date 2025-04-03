@@ -1,83 +1,65 @@
 import sys
-import fitz
-import cv2
-import numpy as np
-import base64
 from pathlib import Path
-import threading
-from tqdm import tqdm
 import time
-import multiprocessing
-from ollama_ocr import OCRProcessor  # Nuevo import
+from gemini_ocr import GeminiOCRProcessor
 
-MODEL_NAME = "granite3.2-vision"
+# Configuración de la API de Gemini
+API_KEY = "AIzaSyAmQwNoXfbPAKIy5iyALdYyM0X0sO83QPE"
+MAX_RETRIES = 5  # Número máximo de reintentos para errores de cuota
+MAX_WORKERS = 2  # Reducido para evitar sobrecargar la API
+MAX_REQUESTS_PER_DAY = 25  # Límite de solicitudes por día según la documentación de Google
+INTERACTIVE = True  # Permite al usuario decidir si continuar o no cuando se alcanza el límite diario
 PROMPT = (
-    "Extrae únicamente el texto e imágenes visibles en la imagen. "
+    "Extrae únicamente el texto e imágenes visibles en el documento. "
     "El resultado debe estar completamente en español y en formato Markdown, "
     "preservando exactamente el formato original, incluyendo encabezados, listas, tablas, negrita, cursiva y cualquier otro estilo presente. "
     "Si alguna parte es ilegible, márcala como 'texto ilegible'. "
-    "No incluyas ningún contenido adicional ni información sobre herramientas externas o detalles que no estén presentes en la imagen."
+    "No incluyas ningún contenido adicional ni información sobre herramientas externas o detalles que no estén presentes en el documento."
 )
-TIMEOUT = 900  # segundos
-
-def preprocess_image(page):
-    """
-    Preprocesamiento menos agresivo para preservar más detalles,
-    inspirado en la versión antigua que realizaba un mejor OCR.
-    """
-    # Renderizamos la página a alta resolución
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-    img_data = pix.tobytes("png")
-    np_arr = np.frombuffer(img_data, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-    # Convertimos a escala de grises
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Aplicamos un filtro de mediana para reducir el ruido sin perder detalles finos
-    processed = cv2.medianBlur(gray, 3)
-
-    # Mejoramos el contraste con ecualización del histograma
-    processed = cv2.equalizeHist(processed)
-
-    return processed
-
-# Se elimina la función run_ollama_subprocess ya no necesaria
 
 def process_pdf(pdf_path):
-    doc = fitz.open(pdf_path)
-    # Crear carpeta temporal para las imágenes extraídas
-    temp_dir = pdf_path.parent / (pdf_path.stem + "_temp")
-    temp_dir.mkdir(exist_ok=True)
-    image_paths = []
-    total_pages = len(doc)
-    for i, page in enumerate(doc):
-        print(f"Procesando página {i + 1}/{total_pages}")
-        clean_image = preprocess_image(page)
-        _, png_bytes = cv2.imencode(".png", clean_image)
-        img_path = temp_dir / f"page_{i+1:03d}.png"
-        with open(img_path, "wb") as f:
-            f.write(png_bytes.tobytes())
-        image_paths.append(str(img_path))
+    """
+    Procesa un archivo PDF completo directamente con la API de Google Gemini.
     
-    # Inicializar OCRProcessor y procesar en lote
-    ocr = OCRProcessor(model_name=MODEL_NAME, max_workers=4)
-    batch_results = ocr.process_batch(
-        input_path=str(temp_dir),
-        format_type="markdown",
-        recursive=False,
-        preprocess=False,
+    Args:
+        pdf_path (Path): Ruta al archivo PDF a procesar
+        
+    Returns:
+        str: Contenido extraído en formato Markdown
+    """
+    print(f"Procesando PDF: {pdf_path.name}")
+    
+    # Inicializar GeminiOCRProcessor
+    ocr = GeminiOCRProcessor(
+        api_key=API_KEY, 
+        max_workers=MAX_WORKERS, 
+        max_retries=MAX_RETRIES,
+        max_requests_per_day=MAX_REQUESTS_PER_DAY,
+        interactive=INTERACTIVE
+    )
+    
+    print(f"Iniciando procesamiento OCR con límite de {MAX_REQUESTS_PER_DAY} solicitudes por día.")
+    print(f"El proceso puede tomar tiempo si se alcanzan los límites de la API.")
+    if INTERACTIVE:
+        print("Modo interactivo activado: se te preguntará si deseas continuar cuando se alcance el límite diario.")
+    
+    # Procesar el PDF completo directamente
+    result = ocr.process_pdf_direct(
+        pdf_path=str(pdf_path),
         custom_prompt=PROMPT,
         language="Spanish"
     )
     
-    # Recopilar resultados ordenados por nombre (asumiendo numeración en el nombre del archivo)
-    md_output = []
-    for img_file in sorted(batch_results['results'].keys()):
-        md_output.append(batch_results['results'][img_file])
+    # Verificar si el proceso fue cancelado por el usuario
+    if result.startswith("Proceso cancelado por el usuario"):
+        print(f"Procesamiento cancelado por el usuario.")
+        raise Exception("Procesamiento cancelado por el usuario.")
+        
+    # Verificar si hay errores en el resultado
+    if result.startswith("Error:"):
+        print(f"Advertencia: {result}")
     
-    # ...opcional: código para eliminar la carpeta temporal si se desea...
-    return "\n\n".join(md_output)
+    return result
 
 def main(pdf_folder):
     pdf_dir = Path(pdf_folder)
@@ -90,14 +72,22 @@ def main(pdf_folder):
 
         try:
             md_content = process_pdf(pdf_path)
+            
+            # Guardar el contenido
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(md_content)
+            
+            print(f"Guardado: {output_path}")
+            
         except KeyboardInterrupt:
             print("Interrupción por teclado. Finalizando procesamiento de PDFs.")
             sys.exit(0)
-
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(md_content)
-
-        print(f"Guardado: {output_path}")
+        except Exception as e:
+            print(f"Error procesando {pdf_path.name}: {str(e)}")
+            if "Procesamiento cancelado por el usuario" in str(e):
+                print("Finalizando procesamiento de PDFs por solicitud del usuario.")
+                sys.exit(0)
+            print("Continuando con el siguiente archivo...")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
