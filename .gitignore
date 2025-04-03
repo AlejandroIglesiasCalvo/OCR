@@ -9,3 +9,6 @@ env/
 # Archivos de configuración de IDE
 .vscode/
 .idea/
+
+# Archivos de configuración
+.env

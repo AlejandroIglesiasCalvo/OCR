@@ -1,10 +1,15 @@
 import sys
 from pathlib import Path
 import time
+import os
+from dotenv import load_dotenv
 from gemini_ocr import GeminiOCRProcessor
 
+# Cargar variables de entorno desde .env
+load_dotenv()
+
 # Configuración de la API de Gemini
-API_KEY = "AIzaSyAmQwNoXfbPAKIy5iyALdYyM0X0sO83QPE"
+API_KEY = os.getenv("GOOGLE_API_KEY")
 MAX_RETRIES = 5  # Número máximo de reintentos para errores de cuota
 MAX_WORKERS = 2  # Reducido para evitar sobrecargar la API
 MAX_REQUESTS_PER_DAY = 25  # Límite de solicitudes por día según la documentación de Google
